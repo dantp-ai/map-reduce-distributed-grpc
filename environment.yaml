@@ -1,0 +1,14 @@
+name: grpc-test
+channels:
+  - anaconda
+  - defaults
+  - conda-forge
+dependencies:
+  - grpcio=1.42.0=py37ha29bfda_0
+  - grpcio-tools=1.16.1=py37h23ab428_0
+  - pip=22.3.1=py37hecd8cb5_0
+  - protobuf=3.20.3=py37hcec6c5f_0
+  - python=3.7.16=h218abb5_0
+  - pre-commit=2.20.0
+  - pip:
+    - pytest==7.4.3
