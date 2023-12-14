@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package mapreduce;
+
+import "google/protobuf/empty.proto"; // Import the Empty message type
+
+service DriverService {
+    rpc RequestTask (google.protobuf.Empty) returns (TaskInput) {}
+
+    rpc FinishMap (google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+    rpc FinishReduce (google.protobuf.Empty) returns (google.protobuf.Empty) {}
+}
+
+enum TaskType {
+    Map = 0;
+    Reduce = 1;
+    NoTask = 2;
+    ShutDown = 3;
+}
+
+message TaskInput {
+    TaskType type = 1;
+    uint32 id = 2;
+    uint32 M = 3;
+    repeated string filePaths = 4;
+}
