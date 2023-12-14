@@ -55,9 +55,9 @@ For me, it worked best with miniconda.
 
 ### Notes
 
-* Worker starts and is waiting for driver to assign it a task (map, reduce or wait).
-* if a worker is finished with MAP and there are no other MAPs available, it waits until all other currently running MAP tasks finished.
-* When all tasks are done, driver shuts down, and so do all the workers.
+* Upon starting a worker it waits for driver to start and assign it a task (map, reduce or wait).
+* If a worker has finished its MAP tasks and there are no other MAP tasks available, it waits until all other currently running MAP tasks have finished.
+* When all tasks are done, driver shuts down and so do all the workers.
 * Words from files are processed by:
   * making them lower-case
   * keeping only those words for which all their characters are in `a-z`
