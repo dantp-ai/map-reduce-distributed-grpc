@@ -61,7 +61,8 @@ For me, it worked best with miniconda.
 * Words from files are processed by:
   * making them lower-case
   * keeping only those words for which all their characters are in `a-z`
-
+* Each MAP task is assigned to one or more text files using a cyclic order strategy.
+  * The first task receives the first file, the second task receives the second file, and so on until the last task. If there are files remaining, the first task receives another file, and so on until all files have been assigned.
 
 ### Limitations
 
