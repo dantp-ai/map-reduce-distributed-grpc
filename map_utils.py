@@ -17,17 +17,18 @@ def map_file(map_id: int, filename: str, M: int) -> None:
 
     file_handles = defaultdict(list)
 
+    def _process_word(word):
+        bucket_id = ord(word[0]) % M
+        intermediate_file = f"{config.TMP_DIR_PATH}/mr-{map_id}-{bucket_id}"
+        file_handles[intermediate_file].append(f"{word}\n")
+
     with open(filename, "r") as file:
         text = file.read().lower()
 
         words = utils.tokenize(text)
         words = utils.filter_words(words)
 
-    for word in words:
-        bucket_id = ord(word[0]) % M
-        intermediate_file = f"{config.TMP_DIR_PATH}/mr-{map_id}-{bucket_id}"
-
-        file_handles[intermediate_file].append(f"{word}\n")
+    [_process_word(word) for word in words]
 
     logger.info(f"[MAP] executing on file {filename}...")
     for intermediate_file, word_buffer in file_handles.items():
