@@ -67,11 +67,13 @@ if __name__ == "__main__":
     import pstats
     import cProfile
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(description="Starts the worker.")
     parser.add_argument(
         "--name",
         dest="name",
+        required=False if "--to_profile" not in sys.argv else True,
         type=str,
         help="Name for worker to differentiate profiling stats from other workers.",
     )
@@ -79,6 +81,9 @@ if __name__ == "__main__":
         "--profile", dest="to_profile", action="store_true", help="Enable the profiler"
     )
     args = parser.parse_args()
+
+    if args.to_profile and not args.name:
+        parser.error("--name argument is required when --profile is set.")
 
     worker = Worker()
     if args.to_profile:

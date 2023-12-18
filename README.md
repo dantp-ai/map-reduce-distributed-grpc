@@ -34,12 +34,15 @@ For me, it worked best with miniconda.
     * `-M`: number of reduce tasks (default: 6)
     * `-nw`: number of maximum workers for gRPC driver server to process concurrently (default: 4)
     * `-dir`: Directory path to input data (default: `./data`)
+    * `--profile`: Enable profiler (default: false)
 2. Start worker in each window like so: `python worker.py`
+    * `--name`: Name of the worker. Used to save different profiles for each worker.
+    * `--profile`: Enable profiler (default: false)
 
 * Final output of map-reduce can be found under `./out`.
   * There are as many files as reduce tasks. Each file contains word-count pairs separated by white-space.
-* Intermediate output of map tasks can be found under `./tmp`. 
-  * There are `min(num_input_files*N, M*N)` intermediate files. 
+* Intermediate output of map tasks can be found under `./tmp`.
+  * There are `min(num_input_files*N, M*N)` intermediate files.
   * Each file contains words that fall in the bucket with `bucket_id = ord(first_character_word) % M`.
 
 ### Testing the example
