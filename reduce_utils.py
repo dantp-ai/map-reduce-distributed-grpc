@@ -1,5 +1,4 @@
 import glob
-import threading
 from collections import Counter
 
 import grpc
@@ -13,7 +12,7 @@ logger = logging_config.logger
 
 
 def reduce(reduce_id):
-    logger.info(f"[REDUCE]: {reduce_id}")
+    logger.info(f"[REDUCE]: {reduce_id} executing...")
     files = glob.glob(f"{config.TMP_DIR_PATH}/*-{reduce_id}")
     counter = Counter()
     for file in files:
@@ -21,14 +20,12 @@ def reduce(reduce_id):
             words = f.read().split()
         counter.update(words)
 
-    output_path_lock = threading.Lock()
-    with output_path_lock:
-        if not config.OUT_DIR_PATH.exists():
-            config.OUT_DIR_PATH.mkdir(exist_ok=True)
+    config.OUT_DIR_PATH.mkdir(exist_ok=True)
 
     with open(f"{config.OUT_DIR_PATH}/out-{reduce_id}.txt", "w+") as file:
         file.write("\n".join(f"{word} {count}" for word, count in counter.items()))
 
+    logger.info("Done.")
     finish_reduce()
 
 
