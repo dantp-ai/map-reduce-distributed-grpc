@@ -141,13 +141,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "-dir", dest="data_dir", type=str, default="./data", help="Input data directory"
     )
+    parser.add_argument(
+        "--profile", dest="to_profile", action="store_true", help="Enable the profiler"
+    )
     args = parser.parse_args()
 
     service = DriverService(args.N, args.M, args.data_dir)
 
-    with profile_context() as pr:
+    if args.to_profile:
+        with profile_context() as pr:
+            run(service, args.num_workers)
+        stats = pstats.Stats(pr)
+        stats.sort_stats(pstats.SortKey.TIME)
+        stats.dump_stats(filename="./driver_profiling.prof")
+    else:
         run(service, args.num_workers)
-
-    stats = pstats.Stats(pr)
-    stats.sort_stats(pstats.SortKey.TIME)
-    stats.dump_stats(filename="./driver_profiling.prof")

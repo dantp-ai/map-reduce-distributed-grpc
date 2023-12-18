@@ -66,14 +66,31 @@ def profile_context():
 if __name__ == "__main__":
     import pstats
     import cProfile
-    import sys
+    import argparse
 
-    name = sys.argv[1]
+    parser = argparse.ArgumentParser(description="Starts the worker.")
+    parser.add_argument(
+        "--name",
+        dest="name",
+        type=str,
+        help="Name for worker to differentiate profiling stats from other workers.",
+    )
+    parser.add_argument(
+        "--profile", dest="to_profile", action="store_true", help="Enable the profiler"
+    )
+    args = parser.parse_args()
 
     worker = Worker()
-    with profile_context() as pr:
+    if args.to_profile:
+        with profile_context() as pr:
+            worker.run()
+        stats = pstats.Stats(pr)
+        stats.sort_stats(pstats.SortKey.TIME)
+        filename_profiling = (
+            f"./worker_{args.name}_profiling.prof"
+            if args.name
+            else "./worker_profiling.prof"
+        )
+        stats.dump_stats(filename=filename_profiling)
+    else:
         worker.run()
-
-    stats = pstats.Stats(pr)
-    stats.sort_stats(pstats.SortKey.TIME)
-    stats.dump_stats(filename=f"./worker_{name}_profiling.prof")
