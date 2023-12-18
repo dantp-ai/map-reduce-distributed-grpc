@@ -50,8 +50,6 @@ For me, it worked best with miniconda.
   python -m tests.test_e2e
   ```
 
-  It may take some seconds...
-
 
 ### Notes
 
