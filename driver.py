@@ -2,6 +2,7 @@ import argparse
 import glob
 import time
 from concurrent import futures
+from contextlib import contextmanager
 from threading import Event
 from threading import Lock
 from typing import List
@@ -15,6 +16,14 @@ from map_reduce_pb2 import TaskInput
 from map_reduce_pb2 import TaskType
 
 logger = logging_config.logger
+
+
+@contextmanager
+def profile_context():
+    profiler = cProfile.Profile()
+    profiler.enable()
+    yield profiler
+    profiler.disable()
 
 
 def assign_files_to_map_ids(N: int, data_dir: str) -> List[List[str]]:
@@ -113,6 +122,10 @@ def run(service: DriverService, num_workers: int = 4) -> None:
 
 
 if __name__ == "__main__":
+
+    import cProfile
+    import pstats
+
     parser = argparse.ArgumentParser(description="Starts the driver.")
     parser.add_argument("-N", dest="N", type=int, default=4, help="Number of MAP tasks")
     parser.add_argument(
@@ -132,4 +145,9 @@ if __name__ == "__main__":
 
     service = DriverService(args.N, args.M, args.data_dir)
 
-    run(service, args.num_workers)
+    with profile_context() as pr:
+        run(service, args.num_workers)
+
+    stats = pstats.Stats(pr)
+    stats.sort_stats(pstats.SortKey.TIME)
+    stats.dump_stats(filename="./driver_profiling.prof")

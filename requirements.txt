@@ -3,4 +3,5 @@ grpcio-tools=1.16.1
 pip=22.3.1
 protobuf=3.20.3
 pre-commit=2.20.0
+snakeviz==2.0.1
 pytest==7.4.3

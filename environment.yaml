@@ -10,5 +10,6 @@ dependencies:
   - protobuf=3.20.3=py37hcec6c5f_0
   - python=3.7.16=h218abb5_0
   - pre-commit=2.20.0
+  - snakeviz=2.0.1
   - pip:
     - pytest==7.4.3

@@ -1,4 +1,5 @@
 import logging
+from contextlib import contextmanager
 from enum import Enum
 
 import grpc
@@ -54,6 +55,25 @@ class Worker:
                     self.state = WorkerState.Wait
 
 
+@contextmanager
+def profile_context():
+    profiler = cProfile.Profile()
+    profiler.enable()
+    yield profiler
+    profiler.disable()
+
+
 if __name__ == "__main__":
+    import pstats
+    import cProfile
+    import sys
+
+    name = sys.argv[1]
+
     worker = Worker()
-    worker.run()
+    with profile_context() as pr:
+        worker.run()
+
+    stats = pstats.Stats(pr)
+    stats.sort_stats(pstats.SortKey.TIME)
+    stats.dump_stats(filename=f"./worker_{name}_profiling.prof")
