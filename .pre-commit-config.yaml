@@ -1,0 +1,29 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.1.0
+    hooks:
+      - id: trailing-whitespace
+      - id: check-toml
+      - id: check-yaml
+      - id: check-merge-conflict
+        args: ['--assume-in-merge']
+      - id: check-added-large-files
+        args: ['--maxkb=10240']
+      - id: debug-statements
+      - id: detect-private-key
+  - repo: https://github.com/asottile/reorder_python_imports
+    rev: v2.3.0
+    hooks:
+    - id: reorder-python-imports
+      language_version: python
+  - repo: https://github.com/psf/black
+    rev: 22.3.0
+    hooks:
+      - id: black
+  - repo: https://github.com/PyCQA/flake8
+    rev: 3.9.2
+    hooks:
+      - id: flake8
+        exclude: (notebooks)
+        args: ['--ignore=E203,E501,W503,E231', '--max-line-length=79', '--max-complexity=15', '--select=B,C,E,F,W,T4,B9']
+        language_version: python
