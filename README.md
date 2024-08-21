@@ -68,3 +68,7 @@ For me, it worked best with miniconda.
 ### Limitations
 
 * A map task processes an entire input file. One could extend the implementation to allow chunks of the files for each map task.
+* The implementation does not work with extremely large files.
+    * Consider the case where one file is very large and all other relatively small. One worker would need a long time to finish while others are already done and waiting.
+    * Reading the files in roughly equal chunks and creating map tasks for them is a solution.
+        * Here, one should split appropriately such that the split does not occur in between a word, e.g. min(chunksize, position_of_last_blank)
