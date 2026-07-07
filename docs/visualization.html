@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MapReduce · how it works</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  /*
+    Minimal schematic of the distributed MapReduce in this repo.
+    One accent (indigo) on near-black, hairline connectors, mono type.
+    The motion is the message: words flow input -> map -> shuffle -> reduce -> output,
+    while the driver coordinates over gRPC (RequestTask / FinishMap / FinishReduce).
+  */
+  :root {
+    --bg:      #0C0D11;
+    --ink:     #ECEDF2;
+    --muted:   #6E7180;
+    --faint:   #3A3C48;
+    --line:    #20222C;
+    --accent:  #8B93FF;
+    --accent-soft: rgba(139, 147, 255, 0.14);
+    --dot:     6px;
+    --stageW:  1080px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    display: grid;
+    place-items: center;
+    padding: 40px 24px;
+  }
+
+  .frame {
+    width: var(--stageW);
+    max-width: 100%;
+  }
+
+  /* ---- masthead ------------------------------------------------------- */
+  .masthead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 34px;
+  }
+  .title {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.34em;
+    text-transform: uppercase;
+  }
+  .subtitle {
+    font-size: 11.5px;
+    font-weight: 400;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+  .phase {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.22em;
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+  .phase .tick {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--faint);
+    transition: background 0.4s ease, box-shadow 0.4s ease;
+  }
+  .phase.is-active .tick {
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .phase.is-active { color: var(--ink); }
+
+  /* ---- diagram -------------------------------------------------------- */
+  .diagram {
+    position: relative;
+    height: 320px;
+  }
+  .wires {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+  .wire {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 1;
+    transition: stroke 0.3s ease, opacity 0.3s ease;
+  }
+  .wire.mesh { stroke: var(--line); opacity: 0.5; }
+  .wire.lit  { stroke: var(--accent); opacity: 0.85; }
+
+  .columns {
+    position: absolute; inset: 0;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    z-index: 2;
+  }
+  .col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 26px;
+    position: relative;
+  }
+  .col-head {
+    position: absolute;
+    top: -2px;
+    left: 0; right: 0;
+    text-align: center;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .col-head b {
+    color: var(--faint);
+    font-weight: 700;
+    margin-right: 6px;
+  }
+  .col-head .op {
+    display: block;
+    color: var(--faint);
+    font-size: 9.5px;
+    letter-spacing: 0.02em;
+  }
+
+  /* nodes */
+  .node {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 11.5px;
+    color: var(--muted);
+    transition: color 0.3s ease;
+    white-space: nowrap;
+  }
+  .node.rev { flex-direction: row-reverse; }
+  .node .dot {
+    width: var(--dot); height: var(--dot);
+    border-radius: 50%;
+    background: var(--faint);
+    flex: 0 0 auto;
+    transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+  }
+  .node.busy { color: var(--ink); }
+  .node.busy .dot {
+    background: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+  .node .count {
+    color: var(--accent);
+    font-weight: 500;
+    min-width: 12px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  .node.busy .count, .node.has .count { opacity: 1; }
+
+  /* output cards render the final word counts */
+  .out {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    font-size: 11px;
+    min-height: 18px;
+  }
+  .out .fname { color: var(--muted); letter-spacing: 0.02em; }
+  .out .lines {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-left: 2px;
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 0.4s ease, opacity 0.4s ease;
+  }
+  .out.show .lines { max-height: 80px; opacity: 1; }
+  .out .lines span { color: var(--faint); }
+  .out .lines span em { color: var(--accent); font-style: normal; }
+
+  /* ---- flying tokens -------------------------------------------------- */
+  .tokens { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+  .token {
+    position: absolute;
+    top: 0; left: 0;
+    offset-rotate: 0deg;
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--accent);
+    background: var(--bg);
+    padding: 1px 6px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    transform: translate(-50%, -50%);
+    will-change: offset-distance, opacity;
+  }
+  .token.file { color: var(--muted); }
+
+  /* ---- footer: gRPC status + plain-language narration ----------------- */
+  .foot {
+    margin-top: 34px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 11.5px;
+    height: 16px;
+  }
+  .status .rpc { color: var(--faint); letter-spacing: 0.16em; font-weight: 700; font-size: 9.5px; }
+  .status .line { color: var(--muted); }
+  .status .line b { color: var(--accent); font-weight: 500; }
+
+  .narration {
+    font-size: 12px;
+    color: var(--ink);
+    line-height: 1.6;
+    min-height: 40px;
+    max-width: 70ch;
+    transition: opacity 0.3s ease;
+  }
+
+  /* ---- controls ------------------------------------------------------- */
+  .controls {
+    margin-top: 22px;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .controls button {
+    font-family: inherit;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: color 0.2s ease, border-color 0.2s ease;
+  }
+  .controls button:hover { color: var(--ink); border-color: var(--faint); }
+  .controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .diagram.fade { opacity: 0.15; transition: opacity 0.3s ease; }
+
+  @media (max-width: 720px) {
+    .frame { width: 640px; }
+    .subtitle { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .token { display: none; }
+    .diagram.fade { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+  <main class="frame">
+    <header class="masthead">
+      <div>
+        <div class="title">MapReduce</div>
+        <div class="subtitle">distributed word count over gRPC · driver &#8646; workers</div>
+      </div>
+      <div class="phase" id="phase"><span class="tick"></span><span id="phaseLabel">idle</span></div>
+    </header>
+
+    <section class="diagram" id="diagram">
+      <svg class="wires" id="wires" aria-hidden="true"></svg>
+      <div class="columns" id="columns"></div>
+      <div class="tokens" id="tokens"></div>
+    </section>
+
+    <footer class="foot">
+      <div class="status">
+        <span class="rpc">gRPC</span>
+        <span class="line" id="status">&nbsp;</span>
+      </div>
+      <p class="narration" id="narration">A driver coordinates a pool of workers to count every word in a text file.</p>
+    </footer>
+
+    <div class="controls">
+      <button id="btnPlay" aria-label="Pause or resume">Pause</button>
+      <button id="btnRestart" aria-label="Restart the animation">Restart</button>
+    </div>
+  </main>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---- model: faithful to the repo's code ------------------------------
+  // bucket_id = ord(first_char) % M   (words are lowercased, a-z only)
+  const M = 3;
+  // One input file, split into chunks on word boundaries (the README's chunking model).
+  // "the quick brown fox jumps over the lazy dog and the quick fox and the lazy dog become friends"
+  const source = {
+    name: "story.txt",
+    text: "the quick brown fox jumps over the lazy dog and the quick fox and the lazy dog become friends",
+    chunks: [
+      { id: "c0", worker: "w0", words: ["the", "quick", "brown", "fox", "jumps", "over"] },
+      { id: "c1", worker: "w1", words: ["the", "lazy", "dog", "and", "the", "quick", "fox"] },
+      { id: "c2", worker: "w2", words: ["and", "the", "lazy", "dog", "become", "friends"] },
+    ],
+  };
+  const workers = ["w0", "w1", "w2"];
+  const bucketOf = (w) => w.charCodeAt(0) % M;
+
+  // pre-compute per-bucket aggregated counts (what reduce produces)
+  const bucketCounts = Array.from({ length: M }, () => new Map());
+  for (const ch of source.chunks) {
+    for (const w of ch.words) {
+      const b = bucketOf(w);
+      bucketCounts[b].set(w, (bucketCounts[b].get(w) || 0) + 1);
+    }
+  }
+
+  // ---- dom refs --------------------------------------------------------
+  const columnsEl = document.getElementById("columns");
+  const wiresEl   = document.getElementById("wires");
+  const tokensEl  = document.getElementById("tokens");
+  const diagram   = document.getElementById("diagram");
+  const statusEl  = document.getElementById("status");
+  const narrEl    = document.getElementById("narration");
+  const phaseEl   = document.getElementById("phase");
+  const phaseLbl  = document.getElementById("phaseLabel");
+
+  // ---- build the five stages ------------------------------------------
+  const heads = [
+    ["01", "input",   "story.txt · chunked"],
+    ["02", "map",     "tokenize · filter"],
+    ["03", "shuffle", "ord(w[0]) % M"],
+    ["04", "reduce",  "aggregate"],
+    ["05", "output",  "out-{id}.txt"],
+  ];
+  const cols = heads.map(([n, name, op]) => {
+    const col = document.createElement("div");
+    col.className = "col";
+    col.innerHTML = `<div class="col-head"><b>${n}</b>${name}<span class="op">${op}</span></div>`;
+    columnsEl.appendChild(col);
+    return col;
+  });
+
+  const nodeMap = {}; // id -> element
+  function addNode(col, id, label, opts = {}) {
+    const el = document.createElement("div");
+    el.className = "node" + (opts.rev ? " rev" : "");
+    el.dataset.id = id;
+    el.innerHTML = `<span class="dot"></span><span class="text">${label}</span>` +
+                   (opts.count ? `<span class="count">0</span>` : "");
+    col.appendChild(el);
+    nodeMap[id] = el;
+    return el;
+  }
+
+  addNode(cols[0], "src", source.name);
+  workers.forEach((w, i) => addNode(cols[1], "w" + i, w));
+  for (let j = 0; j < M; j++) addNode(cols[2], "b" + j, "b" + j, { count: true });
+  for (let j = 0; j < M; j++) addNode(cols[3], "r" + j, "r" + j, { rev: true });
+
+  const outEls = [];
+  for (let j = 0; j < M; j++) {
+    const el = document.createElement("div");
+    el.className = "out";
+    el.dataset.id = "o" + j;
+    el.innerHTML = `<span class="fname">out-${j}.txt</span><span class="lines"></span>`;
+    cols[4].appendChild(el);
+    nodeMap["o" + j] = el;
+    outEls.push(el);
+  }
+
+  // ---- wire geometry ---------------------------------------------------
+  const anchor = (id) => {
+    const d = nodeMap[id].querySelector(".dot") || nodeMap[id];
+    const r = d.getBoundingClientRect();
+    const s = diagram.getBoundingClientRect();
+    return { x: r.left - s.left + r.width / 2, y: r.top - s.top + r.height / 2 };
+  };
+  const pathD = (a, b) => {
+    const mx = (a.x + b.x) / 2;
+    return `M ${a.x} ${a.y} C ${mx} ${a.y}, ${mx} ${b.y}, ${b.x} ${b.y}`;
+  };
+
+  const wireEdges = [];
+  workers.forEach((_, i) => wireEdges.push(["src", "w" + i, "read"]));    // file chunks -> map
+  workers.forEach((_, i) => {                                             // map -> buckets (mesh)
+    for (let j = 0; j < M; j++) wireEdges.push(["w" + i, "b" + j, "mesh"]);
+  });
+  for (let j = 0; j < M; j++) wireEdges.push(["b" + j, "r" + j, "reduce"]); // bucket -> reduce
+  for (let j = 0; j < M; j++) wireEdges.push(["r" + j, "o" + j, "write"]);  // reduce -> output
+
+  function drawWires() {
+    const r = diagram.getBoundingClientRect();
+    wiresEl.setAttribute("viewBox", `0 0 ${r.width} ${r.height}`);
+    wiresEl.innerHTML = "";
+    for (const [from, to, kind] of wireEdges) {
+      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      p.setAttribute("d", pathD(anchor(from), anchor(to)));
+      p.setAttribute("class", "wire" + (kind === "mesh" ? " mesh" : ""));
+      p.dataset.edge = from + "-" + to;
+      wiresEl.appendChild(p);
+    }
+  }
+  const wireFor = (from, to) => wiresEl.querySelector(`[data-edge="${from}-${to}"]`);
+
+  // ---- animation primitives -------------------------------------------
+  let paused = false, gen = 0;
+  const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function delay(ms) { return new Promise((res) => setTimeout(res, ms)); }
+  async function sleep(ms) {
+    const myGen = gen;
+    let left = ms;
+    while (left > 0) {
+      if (myGen !== gen) throw "abort";
+      while (paused && myGen === gen) await delay(60);
+      const step = Math.min(50, left);
+      await delay(step);
+      left -= step;
+    }
+    if (myGen !== gen) throw "abort";
+  }
+
+  function setPhase(name) {
+    phaseLbl.textContent = name;
+    phaseEl.classList.toggle("is-active", name === "map" || name === "reduce");
+  }
+  function rpc(html) { statusEl.innerHTML = html; }
+  function narrate(text) {
+    narrEl.style.opacity = "0";
+    setTimeout(() => { narrEl.textContent = text; narrEl.style.opacity = "1"; }, 180);
+  }
+
+  // send a token gliding along the wire between two nodes
+  function fly(text, from, to, { fileStyle = false, dur = 1100 } = {}) {
+    const d = pathD(anchor(from), anchor(to));
+    const el = document.createElement("div");
+    el.className = "token" + (fileStyle ? " file" : "");
+    el.textContent = text;
+    el.style.offsetPath = `path('${d}')`;
+    tokensEl.appendChild(el);
+    const wire = wireFor(from, to);
+    if (wire) wire.classList.add("lit");
+    const anim = el.animate(
+      [
+        { offsetDistance: "0%",  opacity: 0 },
+        { offsetDistance: "12%", opacity: 1 },
+        { offsetDistance: "88%", opacity: 1 },
+        { offsetDistance: "100%", opacity: 0 },
+      ],
+      { duration: dur, easing: "cubic-bezier(.45,.05,.35,1)", fill: "forwards" }
+    );
+    anim.onfinish = () => {
+      el.remove();
+      if (wire) wire.classList.remove("lit");
+    };
+    return dur;
+  }
+
+  // ---- reset -----------------------------------------------------------
+  function reset() {
+    tokensEl.innerHTML = "";
+    for (const id in nodeMap) {
+      const el = nodeMap[id];
+      el.classList.remove("busy", "has");
+      const c = el.querySelector(".count");
+      if (c) c.textContent = "0";
+    }
+    outEls.forEach((el) => {
+      el.classList.remove("show");
+      el.querySelector(".lines").innerHTML = "";
+    });
+    setPhase("idle");
+  }
+
+  const linesHTML = (counts) =>
+    [...counts.entries()]
+      .map(([w, c]) => `<span>${w} ${c > 1 ? `<em>${c}</em>` : c}</span>`)
+      .join("");
+
+  // ---- the timeline ----------------------------------------------------
+  async function boot() {
+    setPhase("idle");
+    narrate(`Input — story.txt:  "${source.text}"`);
+    rpc(`driver: listening on <b>[::]:8000</b>`);
+    await sleep(1700);
+  }
+
+  async function mapPhase() {
+    setPhase("map");
+    narrate("Map phase: story.txt is split into chunks on word boundaries; the driver hands one chunk to each worker as a map task.");
+    nodeMap["src"].classList.add("busy");
+    // assign one chunk per worker
+    for (let i = 0; i < source.chunks.length; i++) {
+      const ch = source.chunks[i];
+      rpc(`${ch.worker} &rarr; <b>RequestTask()</b>`);
+      await sleep(340);
+      rpc(`driver &rarr; <b>TaskInput(Map, id=${i}, story.txt[${ch.id}])</b>`);
+      nodeMap["w" + i].classList.add("busy");
+      fly(ch.id, "src", "w" + i, { fileStyle: true, dur: 950 });
+      await sleep(680);
+    }
+
+    narrate("Each worker tokenizes its chunk, keeps a-z words, and emits each into a bucket keyed by its first letter: ord(w[0]) % M.");
+    await sleep(500);
+
+    // emit + shuffle: interleave words across the workers' chunks
+    const maxLen = Math.max(...source.chunks.map((c) => c.words.length));
+    for (let k = 0; k < maxLen; k++) {
+      for (let i = 0; i < source.chunks.length; i++) {
+        const word = source.chunks[i].words[k];
+        if (!word) continue;
+        const b = bucketOf(word);
+        fly(word, "w" + i, "b" + b, { dur: 1150 });
+        const node = nodeMap["b" + b];
+        node.classList.add("busy");
+        const c = node.querySelector(".count");
+        c.textContent = String(Number(c.textContent) + 1);
+        await sleep(340);
+      }
+    }
+    await sleep(500);
+
+    // finish map -> phase flip
+    for (const w of workers) {
+      rpc(`${w} &rarr; <b>FinishMap()</b>`);
+      await sleep(320);
+    }
+    rpc(`driver: all N map tasks done &rarr; state = <b>Reduce</b>`);
+    await sleep(700);
+  }
+
+  async function reducePhase() {
+    setPhase("reduce");
+    narrate("Reduce phase: one task per bucket. A worker reads every mr-*-{id} file for its bucket and aggregates the counts.");
+    for (let j = 0; j < M; j++) {
+      const w = workers[j % workers.length];
+      rpc(`${w} &rarr; <b>TaskInput(Reduce, id=${j})</b>`);
+      nodeMap["r" + j].classList.add("busy");
+      // pull the bucket's words into the reduce task
+      const words = [...bucketCounts[j].keys()];
+      words.forEach((word, idx) => setTimeout(() => fly(word, "b" + j, "r" + j, { dur: 950 }), idx * 180));
+      await sleep(1000);
+      // write the aggregated result out
+      fly("out", "r" + j, "o" + j, { dur: 820 });
+      await sleep(520);
+      const out = nodeMap["o" + j];
+      out.querySelector(".lines").innerHTML = linesHTML(bucketCounts[j]);
+      out.classList.add("show");
+      rpc(`${w} &rarr; <b>FinishReduce()</b>  id=${j}`);
+      await sleep(560);
+    }
+    setPhase("done");
+    narrate("All reduce tasks are done. The driver signals ShutDown and every worker exits cleanly.");
+    rpc(`driver: all M reduce tasks done &rarr; state = <b>ShutDown</b>`);
+    await sleep(1600);
+  }
+
+  async function runOnce() {
+    reset();
+    await boot();
+    await mapPhase();
+    await sleep(400);
+    await reducePhase();
+    await sleep(400);
+  }
+
+  async function loop() {
+    if (REDUCED) return renderStatic();
+    while (true) {
+      try {
+        await runOnce();
+        diagram.classList.add("fade");
+        await sleep(420);
+        diagram.classList.remove("fade");
+      } catch (e) {
+        if (e === "abort") return;
+        throw e;
+      }
+    }
+  }
+
+  // static end-state for reduced-motion users
+  function renderStatic() {
+    reset();
+    setPhase("done");
+    nodeMap["src"].classList.add("busy");
+    workers.forEach((_, i) => nodeMap["w" + i].classList.add("busy"));
+    for (let j = 0; j < M; j++) {
+      const node = nodeMap["b" + j];
+      node.classList.add("busy");
+      let total = 0;
+      for (const c of bucketCounts[j].values()) total += c;
+      node.querySelector(".count").textContent = String(total);
+      nodeMap["r" + j].classList.add("busy");
+      const out = nodeMap["o" + j];
+      out.querySelector(".lines").innerHTML = linesHTML(bucketCounts[j]);
+      out.classList.add("show");
+    }
+    narrate("story.txt is split into chunks; each worker maps a chunk into M buckets by first letter, then reduce aggregates each bucket into out-{id}.txt.");
+    rpc(`driver: job complete &rarr; state = <b>ShutDown</b>`);
+  }
+
+  // ---- controls & lifecycle -------------------------------------------
+  const btnPlay = document.getElementById("btnPlay");
+  const btnRestart = document.getElementById("btnRestart");
+  btnPlay.addEventListener("click", () => {
+    paused = !paused;
+    btnPlay.textContent = paused ? "Play" : "Pause";
+  });
+  btnRestart.addEventListener("click", () => {
+    gen++;             // abort current run
+    paused = false;
+    btnPlay.textContent = "Pause";
+    drawWires();
+    setTimeout(loop, 60);
+  });
+
+  let resizeTimer;
+  addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(drawWires, 150);
+  });
+
+  function start() {
+    drawWires();
+    loop();
+  }
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => { drawWires(); });
+  }
+  start();
+})();
+</script>
+</body>
+</html>
