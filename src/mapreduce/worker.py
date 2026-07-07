@@ -1,17 +1,15 @@
-import logging
+import argparse
+import cProfile
+import pstats
 from contextlib import contextmanager
 from enum import Enum
 
 import grpc
 from google.protobuf.empty_pb2 import Empty
 
-import config
-import logging_config
-import map_utils
-import reduce_utils
-from map_reduce_pb2 import TaskInput
-from map_reduce_pb2 import TaskType
-from map_reduce_pb2_grpc import DriverServiceStub
+from mapreduce import config, logging_config, map_utils, reduce_utils
+from mapreduce.map_reduce_pb2 import TaskInput, TaskType
+from mapreduce.map_reduce_pb2_grpc import DriverServiceStub
 
 logger = logging_config.logger
 
@@ -51,7 +49,7 @@ class Worker:
                     return
             except grpc.RpcError:
                 if self.state != WorkerState.Wait:
-                    logging.info("[DRIVER] not started yet.")
+                    logger.info("[DRIVER] not started yet.")
                     self.state = WorkerState.Wait
 
 
@@ -63,39 +61,35 @@ def profile_context():
     profiler.disable()
 
 
-if __name__ == "__main__":
-    import pstats
-    import cProfile
-    import argparse
-    import sys
-
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Starts the worker.")
     parser.add_argument(
         "--name",
         dest="name",
-        required=False if "--to_profile" not in sys.argv else True,
         type=str,
-        help="Name for worker to differentiate profiling stats from other workers.",
+        help="Name for the worker, used to label its profiling stats.",
     )
     parser.add_argument(
         "--profile", dest="to_profile", action="store_true", help="Enable the profiler"
     )
-    args = parser.parse_args()
-
+    args = parser.parse_args(argv)
     if args.to_profile and not args.name:
-        parser.error("--name argument is required when --profile is set.")
+        parser.error("--name is required when --profile is set.")
+    return args
 
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     worker = Worker()
     if args.to_profile:
         with profile_context() as pr:
             worker.run()
         stats = pstats.Stats(pr)
         stats.sort_stats(pstats.SortKey.TIME)
-        filename_profiling = (
-            f"./worker_{args.name}_profiling.prof"
-            if args.name
-            else "./worker_profiling.prof"
-        )
-        stats.dump_stats(filename=filename_profiling)
+        stats.dump_stats(filename=f"./worker_{args.name}_profiling.prof")
     else:
         worker.run()
+
+
+if __name__ == "__main__":
+    main()

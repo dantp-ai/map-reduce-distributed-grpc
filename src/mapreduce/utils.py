@@ -1,10 +1,6 @@
 import re
 
 
-def ch_lowercase_to_idx(x):
-    return ord(x) - 97
-
-
 def tokenize(text):
     text = text.replace("\n", " ")
     words = text.split(" ")

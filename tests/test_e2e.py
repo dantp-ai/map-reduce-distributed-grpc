@@ -1,75 +1,89 @@
+"""End-to-end test: run the real driver and workers as subprocesses and check
+that the distributed word counts match a naive single-process count."""
+
 import collections
 import glob
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-import config
-import utils
+from mapreduce import utils
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT / "data"
+OUT_DIR = ROOT / "out"
+TMP_DIR = ROOT / "tmp"
 
 
-def aggregate_word_counts(file_paths):
-    word_counter = collections.Counter()
-
-    for file_path in file_paths:
-        with open(file_path, "r") as file:
-            for line in file:
-                parts = line.strip().split()
-                word, count = parts[0], int(parts[1])
-                word_counter[word] += count
-
-    return word_counter
-
-
-def naive_count_words():
-
+def naive_count_words(data_dir: Path) -> collections.Counter:
     counter = collections.Counter()
-    files = glob.glob(f"{Path(__name__).parents[0] / 'data'}/*.txt")
-
-    for file in files:
-        with open(file, "r") as file:
-            text = file.read().lower()
-
-        words = utils.tokenize(text)
-        words = utils.filter_words(words)
-
-        counter.update(words)
-
+    for file in glob.glob(f"{data_dir}/*.txt"):
+        text = Path(file).read_text().lower()
+        counter.update(utils.filter_words(utils.tokenize(text)))
     return counter
 
 
-def run_mapreduce_distributed(n_workers=4):
-    cmd_worker = "python worker.py &"
-    cmd_driver = "python driver.py"
-
-    for _ in range(n_workers):
-        with subprocess.Popen(cmd_worker, shell=True) as proc:
-            proc.communicate(cmd_worker)
-        assert proc.returncode == 0
-
-    with subprocess.Popen(cmd_driver, shell=True) as proc2:
-        proc2.communicate(cmd_driver)
-
-    assert proc2.returncode == 0
+def aggregate_word_counts(file_paths) -> collections.Counter:
+    counter = collections.Counter()
+    for path in file_paths:
+        for line in Path(path).read_text().splitlines():
+            if not line.strip():
+                continue
+            word, count = line.split()
+            counter[word] += int(count)
+    return counter
 
 
-def cleanup_directories():
-    for dir_path in [config.OUT_DIR_PATH, config.TMP_DIR_PATH]:
-        try:
-            shutil.rmtree(dir_path)
-            print(f"Deleted directory: {dir_path}")
-        except Exception as e:
-            print(f"Error deleting directory {dir_path}: {e}")
+def cleanup() -> None:
+    shutil.rmtree(OUT_DIR, ignore_errors=True)
+    shutil.rmtree(TMP_DIR, ignore_errors=True)
 
 
 def test_mapreduce_end_to_end():
-    run_mapreduce_distributed()
-    gt_counts = naive_count_words()
-    counts = aggregate_word_counts(file_paths=glob.glob(f"{config.OUT_DIR_PATH}/*.txt"))
+    cleanup()
+    N, M, num_workers = 4, 6, 4
 
-    cleanup_directories()
+    driver = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "mapreduce.driver",
+            "-N",
+            str(N),
+            "-M",
+            str(M),
+            "-nw",
+            str(num_workers),
+            "-dir",
+            str(DATA_DIR),
+        ],
+        cwd=ROOT,
+    )
+    workers = [
+        subprocess.Popen([sys.executable, "-m", "mapreduce.worker"], cwd=ROOT)
+        for _ in range(num_workers)
+    ]
 
-    assert gt_counts == counts, "Ground truth counts != map-reduce counts."
+    try:
+        driver.wait(timeout=60)
+        for worker in workers:
+            try:
+                worker.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                worker.terminate()
+    finally:
+        for proc in [driver, *workers]:
+            if proc.poll() is None:
+                proc.kill()
+
+    assert driver.returncode == 0, "driver did not exit cleanly"
+
+    expected = naive_count_words(DATA_DIR)
+    actual = aggregate_word_counts(glob.glob(f"{OUT_DIR}/*.txt"))
+    cleanup()
+
+    assert actual == expected, "map-reduce counts != naive counts"
 
 
 if __name__ == "__main__":

@@ -1,19 +1,17 @@
 import argparse
+import cProfile
 import glob
+import pstats
 import time
 from concurrent import futures
 from contextlib import contextmanager
-from threading import Event
-from threading import Lock
-from typing import List
+from threading import Event, Lock
 
 import grpc
 from google.protobuf.empty_pb2 import Empty
 
-import logging_config
-import map_reduce_pb2_grpc
-from map_reduce_pb2 import TaskInput
-from map_reduce_pb2 import TaskType
+from mapreduce import logging_config, map_reduce_pb2_grpc
+from mapreduce.map_reduce_pb2 import TaskInput, TaskType
 
 logger = logging_config.logger
 
@@ -26,7 +24,7 @@ def profile_context():
     profiler.disable()
 
 
-def assign_files_to_map_ids(N: int, data_dir: str) -> List[List[str]]:
+def assign_files_to_map_ids(N: int, data_dir: str) -> list[list[str]]:
     files = glob.glob(f"{data_dir}/*.txt")
 
     # assign files to map IDs with round-robin strategy
@@ -112,7 +110,7 @@ def run(service: DriverService, num_workers: int = 4) -> None:
     map_reduce_pb2_grpc.add_DriverServiceServicer_to_server(service, server)
     server.add_insecure_port("[::]:8000")
 
-    logger.info(f"[DRIVER] starting on {'[::]:8000'}...")
+    logger.info("[DRIVER] starting on [::]:8000...")
     server.start()
     service.event.wait()
     time.sleep(0.5)
@@ -121,11 +119,7 @@ def run(service: DriverService, num_workers: int = 4) -> None:
     server.stop(0)
 
 
-if __name__ == "__main__":
-
-    import cProfile
-    import pstats
-
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Starts the driver.")
     parser.add_argument("-N", dest="N", type=int, default=4, help="Number of MAP tasks")
     parser.add_argument(
@@ -136,7 +130,10 @@ if __name__ == "__main__":
         dest="num_workers",
         type=int,
         default=4,
-        help="Specifies that the gRPC driver server should use a thread pool with a maximum of `num_workers` worker threads to handle incoming requests concurrently.",
+        help=(
+            "The gRPC driver server uses a thread pool with a maximum of "
+            "`num_workers` threads to handle incoming requests concurrently."
+        ),
     )
     parser.add_argument(
         "-dir", dest="data_dir", type=str, default="./data", help="Input data directory"
@@ -144,8 +141,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--profile", dest="to_profile", action="store_true", help="Enable the profiler"
     )
-    args = parser.parse_args()
+    return parser.parse_args(argv)
 
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     service = DriverService(args.N, args.M, args.data_dir)
 
     if args.to_profile:
@@ -156,3 +156,7 @@ if __name__ == "__main__":
         stats.dump_stats(filename="./driver_profiling.prof")
     else:
         run(service, args.num_workers)
+
+
+if __name__ == "__main__":
+    main()
