@@ -4,9 +4,8 @@ from collections import Counter
 import grpc
 from google.protobuf.empty_pb2 import Empty
 
-import config
-import logging_config
-from map_reduce_pb2_grpc import DriverServiceStub
+from mapreduce import config, logging_config
+from mapreduce.map_reduce_pb2_grpc import DriverServiceStub
 
 logger = logging_config.logger
 
@@ -16,7 +15,7 @@ def reduce(reduce_id):
     files = glob.glob(f"{config.TMP_DIR_PATH}/*-{reduce_id}")
     counter = Counter()
     for file in files:
-        with open(file, "r") as f:
+        with open(file) as f:
             words = f.read().split()
         counter.update(words)
 

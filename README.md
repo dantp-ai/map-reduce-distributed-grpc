@@ -1,74 +1,88 @@
+# Distributed MapReduce over gRPC
 
-### Setup
+A small distributed MapReduce that counts words across text files.
+A single driver coordinates a pool of workers over gRPC: the driver hands out map and reduce tasks, and the workers execute them.
 
-#### Using venv
-0. Python: `2.7.15 | 3.6.7 | 3.7.1`
-    * `grpcio-tools` requires either of these versions
-1. Install virtualenv `python -m venv venv`
-2. Activate virtualenv with `source venv/bin/activate`
-3. `pip install -r requirements.txt`
+![MapReduce walkthrough](docs/output.gif)
 
+> The animation is generated from [`docs/visualization.html`](docs/visualization.html); open that file in a browser for the interactive version.
+> It illustrates a single file split into chunks.
 
-#### Using miniconda
-For me, it worked best with miniconda.
+## Requirements
 
-0. `brew install miniconda` (on macOS)
-1. `conda env create -f environment.yaml`
-2. `conda activate grpc-test`
+- Python 3.12+.
+- [uv](https://docs.astral.sh/uv/) for environment and dependency management.
 
+## Setup
 
-> Assuming you are in the root directory of the repository, unless stated otherwise.
+```shell
+uv sync
+```
 
-#### Running on example text files
+This also installs the project itself, which exposes the `mapreduce-driver` and `mapreduce-worker` commands.
 
-0. If proto-generated files are not available, generate them like so:
+## Running
 
-    ```shell
-    python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. map_reduce.proto
-    ```
+Run the example on the text files in `data/`.
+Open one terminal for the driver and one terminal per worker.
 
-0. Open one terminal for the driver and open as many terminals as needed for each worker.
+Start the driver:
 
-1. Start driver: `python driver.py -N 12 -M 8 -nw 4 -dir ./data`
-    * `-N`: number of MAP tasks (default: 4)
-    * `-M`: number of reduce tasks (default: 6)
-    * `-nw`: number of maximum workers for gRPC driver server to process concurrently (default: 4)
-    * `-dir`: Directory path to input data (default: `./data`)
-    * `--profile`: Enable profiler (default: false)
-2. Start worker in each window like so: `python worker.py`
-    * `--name`: Name of the worker. Used to save different profiles for each worker.
-    * `--profile`: Enable profiler (default: false)
+```shell
+uv run mapreduce-driver -N 12 -M 8 -nw 4 -dir ./data
+```
 
-* Final output of map-reduce can be found under `./out`.
-  * There are as many files as reduce tasks. Each file contains word-count pairs separated by white-space.
-* Intermediate output of map tasks can be found under `./tmp`.
-  * There are `min(num_input_files*N, M*N)` intermediate files.
-  * Each file contains words that fall in the bucket with `bucket_id = ord(first_character_word) % M`.
+- `-N`: number of MAP tasks (default: 4).
+- `-M`: number of REDUCE tasks (default: 6).
+- `-nw`: maximum number of worker threads the gRPC driver server uses to handle requests concurrently (default: 4).
+- `-dir`: directory containing the input `.txt` files (default: `./data`).
+- `--profile`: enable the profiler (default: off).
 
-### Testing the example
+Start each worker in its own terminal:
 
-* Run end-to-end test on the example files inside `data/`:
+```shell
+uv run mapreduce-worker
+```
 
-  ```shell
-  python -m tests.test_e2e
-  ```
+- `--name`: worker name, used to label its profiling output (required when `--profile` is set).
+- `--profile`: enable the profiler (default: off).
 
+Outputs:
 
-### Notes
+- Final output is written to `./out`, one file per reduce task, each containing word-count pairs separated by whitespace.
+- Intermediate map output is written to `./tmp`.
+  Each intermediate file holds the words whose bucket is `bucket_id = ord(first_character_of_word) % M`.
 
-* Upon starting a worker it waits for driver to start and assign it a task (map, reduce or wait).
-* If a worker has finished its MAP tasks and there are no other MAP tasks available, it waits until all other currently running MAP tasks have finished.
-* When all tasks are done, driver shuts down and so do all the workers.
-* Words from files are processed by:
-  * making them lower-case
-  * keeping only those words for which all their characters are in `a-z`
-* Each MAP task is assigned to one or more text files using a cyclic order strategy.
-  * The first task receives the first file, the second task receives the second file, and so on until the last task. If there are files remaining, the first task receives another file, and so on until all files have been assigned.
+## Testing
 
-### Limitations
+```shell
+uv run pytest
+```
 
-* A map task processes an entire input file. One could extend the implementation to allow chunks of the files for each map task.
-* The implementation does not work with extremely large files.
-    * Consider the case where one file is very large and all other relatively small. One worker would need a long time to finish while others are already done and waiting.
-    * Reading the files in roughly equal chunks and creating map tasks for them is a solution.
-        * Here, one should split appropriately such that the split does not occur in between a word, e.g. min(chunksize, position_of_last_blank)
+The suite has unit tests (tokenizing, filtering, file assignment, bucketing, reducing, and the driver state machine).
+It also has one end-to-end test that runs the real driver and workers as subprocesses and compares the result against a naive single-process word count.
+
+## Regenerating the protobuf stubs
+
+The generated stubs (`src/mapreduce/map_reduce_pb2*.py`) are committed to the repository.
+Regenerate them after editing `src/mapreduce/map_reduce.proto`:
+
+```shell
+uv run python scripts/generate_protos.py
+```
+
+## How it works
+
+- On startup, each worker waits for the driver and asks it for a task (map, reduce, or wait).
+- A worker that finishes its map tasks waits until all other in-flight map tasks are done before the reduce phase starts.
+- When all tasks are done, the driver shuts down and the workers exit.
+- Words are normalized by lowercasing the text and keeping only words whose characters are all in `a-z`.
+- Map tasks are assigned to input files with a round-robin strategy: the first task gets the first file, the second task the second file, and so on, wrapping around until every file is assigned.
+
+## Limitations
+
+- A map task processes an entire input file.
+  The implementation could be extended to process chunks of a file per map task.
+- Very large files are not handled well.
+  A single large file forces one worker to run much longer than the others while they sit idle.
+  Splitting files into roughly equal chunks on word boundaries (for example `min(chunksize, position_of_last_blank)`) would balance the work.

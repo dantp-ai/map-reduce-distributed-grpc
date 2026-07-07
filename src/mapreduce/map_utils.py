@@ -3,10 +3,8 @@ from collections import defaultdict
 import grpc
 from google.protobuf.empty_pb2 import Empty
 
-import config
-import logging_config
-import utils
-from map_reduce_pb2_grpc import DriverServiceStub
+from mapreduce import config, logging_config, utils
+from mapreduce.map_reduce_pb2_grpc import DriverServiceStub
 
 logger = logging_config.logger
 
@@ -22,7 +20,7 @@ def map_file(map_id: int, filename: str, M: int) -> None:
         intermediate_file = f"{config.TMP_DIR_PATH}/mr-{map_id}-{bucket_id}"
         file_handles[intermediate_file].append(f"{word}\n")
 
-    with open(filename, "r") as file:
+    with open(filename) as file:
         text = file.read().lower()
 
         words = utils.tokenize(text)
