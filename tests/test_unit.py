@@ -1,8 +1,9 @@
 from pathlib import Path
+from unittest import mock
 
 from google.protobuf.empty_pb2 import Empty
 
-from mapreduce import config, map_utils, reduce_utils, utils
+from mapreduce import config, driver, map_utils, reduce_utils, utils, worker
 from mapreduce.driver import DriverService, assign_files_to_map_ids
 from mapreduce.map_reduce_pb2 import TaskType
 
@@ -62,7 +63,7 @@ def test_map_file_buckets_words_by_first_letter(tmp_path, monkeypatch):
 def test_reduce_aggregates_bucket_counts(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "TMP_DIR_PATH", tmp_path / "tmp")
     monkeypatch.setattr(config, "OUT_DIR_PATH", tmp_path / "out")
-    monkeypatch.setattr(reduce_utils, "finish_reduce", lambda: None)
+    monkeypatch.setattr(reduce_utils, "finish_reduce", lambda *args: None)
     (tmp_path / "tmp").mkdir()
     (tmp_path / "tmp" / "mr-0-3").write_text("the\nthe\nfox\n")
     (tmp_path / "tmp" / "mr-1-3").write_text("the\ndog\n")
@@ -101,3 +102,50 @@ def test_driver_state_machine_full_cycle(tmp_path):
     service.FinishReduce(Empty(), ctx)
     assert service.state == TaskType.ShutDown
     assert service.event.is_set()
+
+
+# --- configurable address -------------------------------------------------
+def test_resolve_address_defaults_to_localhost(monkeypatch):
+    monkeypatch.delenv(config.ADDRESS_ENV_VAR, raising=False)
+    assert config.resolve_address() == "localhost:8000"
+
+
+def test_resolve_address_honors_env_var(monkeypatch):
+    monkeypatch.setenv(config.ADDRESS_ENV_VAR, "example.com:9999")
+    assert config.resolve_address() == "example.com:9999"
+
+
+def test_driver_parse_args_address_default():
+    assert driver.parse_args([]).address == "[::]:8000"
+
+
+def test_driver_parse_args_address_override():
+    assert driver.parse_args(["--address", "[::]:9001"]).address == "[::]:9001"
+
+
+def test_driver_run_binds_passed_address(monkeypatch):
+    fake_server = mock.Mock()
+    monkeypatch.setattr(driver.grpc, "server", lambda *a, **k: fake_server)
+    monkeypatch.setattr(driver.time, "sleep", lambda *a, **k: None)
+
+    service = DriverService(N=1, M=1, data_dir=".")
+    service.event.set()  # so run() returns immediately without waiting
+
+    driver.run(service, num_workers=1, address="[::]:12345")
+
+    fake_server.add_insecure_port.assert_called_once_with("[::]:12345")
+
+
+def test_worker_parse_args_address_default(monkeypatch):
+    monkeypatch.delenv(config.ADDRESS_ENV_VAR, raising=False)
+    assert worker.parse_args([]).address == "localhost:8000"
+
+
+def test_worker_parse_args_address_falls_back_to_env(monkeypatch):
+    monkeypatch.setenv(config.ADDRESS_ENV_VAR, "host:1234")
+    assert worker.parse_args([]).address == "host:1234"
+
+
+def test_worker_parse_args_address_override_beats_env(monkeypatch):
+    monkeypatch.setenv(config.ADDRESS_ENV_VAR, "host:1234")
+    assert worker.parse_args(["--address", "other:5678"]).address == "other:5678"

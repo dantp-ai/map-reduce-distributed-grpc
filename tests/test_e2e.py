@@ -15,6 +15,9 @@ DATA_DIR = ROOT / "data"
 OUT_DIR = ROOT / "out"
 TMP_DIR = ROOT / "tmp"
 
+# Non-default port to exercise the configurable address wiring end-to-end.
+PORT = 8123
+
 
 def naive_count_words(data_dir: Path) -> collections.Counter:
     counter = collections.Counter()
@@ -57,11 +60,22 @@ def test_mapreduce_end_to_end():
             str(num_workers),
             "-dir",
             str(DATA_DIR),
+            "--address",
+            f"[::]:{PORT}",
         ],
         cwd=ROOT,
     )
     workers = [
-        subprocess.Popen([sys.executable, "-m", "mapreduce.worker"], cwd=ROOT)
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "mapreduce.worker",
+                "--address",
+                f"localhost:{PORT}",
+            ],
+            cwd=ROOT,
+        )
         for _ in range(num_workers)
     ]
 

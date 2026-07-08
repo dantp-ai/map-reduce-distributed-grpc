@@ -36,6 +36,7 @@ uv run mapreduce-driver -N 12 -M 8 -nw 4 -dir ./data
 - `-M`: number of REDUCE tasks (default: 6).
 - `-nw`: maximum number of worker threads the gRPC driver server uses to handle requests concurrently (default: 4).
 - `-dir`: directory containing the input `.txt` files (default: `./data`).
+- `--address`: address the driver binds to (default: `[::]:8000`).
 - `--profile`: enable the profiler (default: off).
 
 Start each worker in its own terminal:
@@ -45,7 +46,23 @@ uv run mapreduce-worker
 ```
 
 - `--name`: worker name, used to label its profiling output (required when `--profile` is set).
+- `--address`: address of the driver to connect to.
+  Defaults to the `MAPREDUCE_ADDRESS` environment variable, or `localhost:8000` if that is unset.
 - `--profile`: enable the profiler (default: off).
+
+To run the driver and workers on a non-default port, point them at the same address:
+
+```shell
+uv run mapreduce-driver --address "[::]:9000"
+uv run mapreduce-worker --address localhost:9000
+```
+
+Alternatively, set the `MAPREDUCE_ADDRESS` environment variable so every worker picks it up without passing `--address`:
+
+```shell
+export MAPREDUCE_ADDRESS=localhost:9000
+uv run mapreduce-worker
+```
 
 Outputs:
 

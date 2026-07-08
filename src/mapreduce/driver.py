@@ -15,6 +15,9 @@ from mapreduce.map_reduce_pb2 import TaskInput, TaskType
 
 logger = logging_config.logger
 
+# Default address the driver binds to (all interfaces, port 8000).
+DEFAULT_BIND_ADDRESS = "[::]:8000"
+
 
 @contextmanager
 def profile_context():
@@ -105,12 +108,16 @@ class DriverService(map_reduce_pb2_grpc.DriverServiceServicer):
             return TaskInput(type=self.state)
 
 
-def run(service: DriverService, num_workers: int = 4) -> None:
+def run(
+    service: DriverService,
+    num_workers: int = 4,
+    address: str = DEFAULT_BIND_ADDRESS,
+) -> None:
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=num_workers))
     map_reduce_pb2_grpc.add_DriverServiceServicer_to_server(service, server)
-    server.add_insecure_port("[::]:8000")
+    server.add_insecure_port(address)
 
-    logger.info("[DRIVER] starting on [::]:8000...")
+    logger.info(f"[DRIVER] starting on {address}...")
     server.start()
     service.event.wait()
     time.sleep(0.5)
@@ -139,6 +146,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "-dir", dest="data_dir", type=str, default="./data", help="Input data directory"
     )
     parser.add_argument(
+        "--address",
+        dest="address",
+        type=str,
+        default=DEFAULT_BIND_ADDRESS,
+        help="Address the driver binds to (default: [::]:8000).",
+    )
+    parser.add_argument(
         "--profile", dest="to_profile", action="store_true", help="Enable the profiler"
     )
     return parser.parse_args(argv)
@@ -150,12 +164,12 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.to_profile:
         with profile_context() as pr:
-            run(service, args.num_workers)
+            run(service, args.num_workers, args.address)
         stats = pstats.Stats(pr)
         stats.sort_stats(pstats.SortKey.TIME)
         stats.dump_stats(filename="./driver_profiling.prof")
     else:
-        run(service, args.num_workers)
+        run(service, args.num_workers, args.address)
 
 
 if __name__ == "__main__":
