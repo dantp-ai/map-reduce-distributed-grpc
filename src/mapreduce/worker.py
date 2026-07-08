@@ -1,6 +1,7 @@
 import argparse
 import cProfile
 import pstats
+import time
 from contextlib import contextmanager
 from enum import Enum
 
@@ -21,8 +22,16 @@ class WorkerState(Enum):
 
 
 class Worker:
-    def __init__(self):
+    def __init__(
+        self,
+        max_failures: int = 10,
+        base_backoff: float = 0.2,
+        max_backoff: float = 1.0,
+    ) -> None:
         self.state = WorkerState.Work
+        self.max_failures = max_failures
+        self.base_backoff = base_backoff
+        self.max_backoff = max_backoff
 
     def request_task(self) -> TaskInput:
         with grpc.insecure_channel(config.SERVER_ADDRESS) as channel:
@@ -31,9 +40,13 @@ class Worker:
         return task
 
     def run(self) -> None:
+        failures = 0
         while True:
             try:
                 task = self.request_task()
+                # A reachable driver resets the consecutive-failure counter,
+                # so an early startup wait never counts against the bound.
+                failures = 0
                 if task.type == TaskType.Map:
                     self.state = WorkerState.Work
                     map_utils.map(task.id, task.filePaths, task.M)
@@ -48,9 +61,20 @@ class Worker:
                     logger.info("[WORKER] shut down.")
                     return
             except grpc.RpcError:
+                failures += 1
+                if failures >= self.max_failures:
+                    logger.info(
+                        f"[WORKER] driver unreachable after {failures} "
+                        "attempts; shutting down."
+                    )
+                    return
                 if self.state != WorkerState.Wait:
                     logger.info("[DRIVER] not started yet.")
                     self.state = WorkerState.Wait
+                # Back off (capped exponential) so we do not busy-spin
+                # while the driver is down.
+                delay = min(self.base_backoff * 2 ** (failures - 1), self.max_backoff)
+                time.sleep(delay)
 
 
 @contextmanager
