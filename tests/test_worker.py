@@ -46,7 +46,9 @@ def test_run_dispatches_map_then_shuts_down(monkeypatch):
     monkeypatch.setattr(
         worker_mod.map_utils,
         "map",
-        lambda map_id, file_paths, M: mapped.append((map_id, list(file_paths), M)),
+        lambda map_id, file_paths, M, address: mapped.append(
+            (map_id, list(file_paths), M)
+        ),
     )
 
     Worker().run()

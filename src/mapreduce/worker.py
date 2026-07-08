@@ -24,17 +24,19 @@ class WorkerState(Enum):
 class Worker:
     def __init__(
         self,
+        address: str = config.SERVER_ADDRESS,
         max_failures: int = 10,
         base_backoff: float = 0.2,
         max_backoff: float = 1.0,
     ) -> None:
         self.state = WorkerState.Work
+        self.address = address
         self.max_failures = max_failures
         self.base_backoff = base_backoff
         self.max_backoff = max_backoff
 
     def request_task(self) -> TaskInput:
-        with grpc.insecure_channel(config.SERVER_ADDRESS) as channel:
+        with grpc.insecure_channel(self.address) as channel:
             stub = DriverServiceStub(channel)
             task = stub.RequestTask(Empty())
         return task
@@ -49,10 +51,10 @@ class Worker:
                 failures = 0
                 if task.type == TaskType.Map:
                     self.state = WorkerState.Work
-                    map_utils.map(task.id, task.filePaths, task.M)
+                    map_utils.map(task.id, task.filePaths, task.M, self.address)
                 elif task.type == TaskType.Reduce:
                     self.state = WorkerState.Work
-                    reduce_utils.reduce(task.id)
+                    reduce_utils.reduce(task.id, self.address)
                 elif task.type == TaskType.NoTask:
                     if self.state != WorkerState.Idle:
                         logger.info("[WORKER] waiting for new available task.")
@@ -94,6 +96,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Name for the worker, used to label its profiling stats.",
     )
     parser.add_argument(
+        "--address",
+        dest="address",
+        type=str,
+        default=config.resolve_address(),
+        help=(
+            "Address of the driver to connect to. Falls back to the "
+            "MAPREDUCE_ADDRESS env var, then localhost:8000."
+        ),
+    )
+    parser.add_argument(
         "--profile", dest="to_profile", action="store_true", help="Enable the profiler"
     )
     args = parser.parse_args(argv)
@@ -104,7 +116,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    worker = Worker()
+    worker = Worker(args.address)
     if args.to_profile:
         with profile_context() as pr:
             worker.run()

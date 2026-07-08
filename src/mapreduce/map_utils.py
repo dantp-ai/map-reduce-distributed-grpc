@@ -34,15 +34,15 @@ def map_file(map_id: int, filename: str, M: int) -> None:
             file_handle.writelines(word_buffer)
 
 
-def finish_map() -> None:
-    with grpc.insecure_channel(config.SERVER_ADDRESS) as channel:
+def finish_map(address: str = config.SERVER_ADDRESS) -> None:
+    with grpc.insecure_channel(address) as channel:
         stub = DriverServiceStub(channel)
         stub.FinishMap(Empty())
 
 
-def map(map_id: int, file_paths, M: int) -> None:
+def map(map_id: int, file_paths, M: int, address: str = config.SERVER_ADDRESS) -> None:
     logger.info(f"[MAP] running {map_id}...")
     for fpath in file_paths:
         map_file(map_id, fpath, M)
     logger.info("Done.")
-    finish_map()
+    finish_map(address)

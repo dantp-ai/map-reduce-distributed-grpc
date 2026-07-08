@@ -10,7 +10,7 @@ from mapreduce.map_reduce_pb2_grpc import DriverServiceStub
 logger = logging_config.logger
 
 
-def reduce(reduce_id):
+def reduce(reduce_id, address: str = config.SERVER_ADDRESS):
     logger.info(f"[REDUCE]: {reduce_id} executing...")
     files = glob.glob(f"{config.TMP_DIR_PATH}/*-{reduce_id}")
     counter = Counter()
@@ -25,10 +25,10 @@ def reduce(reduce_id):
         file.write("\n".join(f"{word} {count}" for word, count in counter.items()))
 
     logger.info("Done.")
-    finish_reduce()
+    finish_reduce(address)
 
 
-def finish_reduce() -> None:
-    with grpc.insecure_channel(config.SERVER_ADDRESS) as channel:
+def finish_reduce(address: str = config.SERVER_ADDRESS) -> None:
+    with grpc.insecure_channel(address) as channel:
         stub = DriverServiceStub(channel)
         stub.FinishReduce(Empty())
