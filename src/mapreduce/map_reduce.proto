@@ -19,9 +19,15 @@ enum TaskType {
     ShutDown = 3;
 }
 
+message Chunk {
+    string path = 1;
+    uint64 start = 2;
+    uint64 end = 3;
+}
+
 message TaskInput {
     TaskType type = 1;
     uint32 id = 2;
     uint32 M = 3;
-    repeated string filePaths = 4;
+    repeated Chunk chunks = 4;
 }

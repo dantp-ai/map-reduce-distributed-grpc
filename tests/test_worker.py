@@ -7,7 +7,7 @@ import grpc
 import pytest
 
 from mapreduce import worker as worker_mod
-from mapreduce.map_reduce_pb2 import TaskInput, TaskType
+from mapreduce.map_reduce_pb2 import Chunk, TaskInput, TaskType
 from mapreduce.worker import Worker
 
 
@@ -34,9 +34,10 @@ def test_run_exits_after_bounded_failures(monkeypatch):
 
 def test_run_dispatches_map_then_shuts_down(monkeypatch):
     """A Map task is dispatched, then a ShutDown task ends the loop."""
+    chunk = Chunk(path="f.txt", start=0, end=10)
     tasks = iter(
         [
-            TaskInput(type=TaskType.Map, id=0, filePaths=["f.txt"], M=2),
+            TaskInput(type=TaskType.Map, id=0, chunks=[chunk], M=2),
             TaskInput(type=TaskType.ShutDown),
         ]
     )
@@ -46,14 +47,14 @@ def test_run_dispatches_map_then_shuts_down(monkeypatch):
     monkeypatch.setattr(
         worker_mod.map_utils,
         "map",
-        lambda map_id, file_paths, M, address: mapped.append(
-            (map_id, list(file_paths), M)
+        lambda map_id, chunks, M, address: mapped.append(
+            (map_id, [(c.path, c.start, c.end) for c in chunks], M)
         ),
     )
 
     Worker().run()
 
-    assert mapped == [(0, ["f.txt"], 2)]
+    assert mapped == [(0, [("f.txt", 0, 10)], 2)]
 
 
 def test_failure_counter_resets_after_success(monkeypatch):

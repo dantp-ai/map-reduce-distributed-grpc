@@ -1,8 +1,10 @@
 import argparse
 import cProfile
 import glob
+import os
 import pstats
 import time
+from collections.abc import Iterator
 from concurrent import futures
 from contextlib import contextmanager
 from threading import Event, Lock
@@ -10,10 +12,13 @@ from threading import Event, Lock
 import grpc
 from google.protobuf.empty_pb2 import Empty
 
-from mapreduce import logging_config, map_reduce_pb2_grpc
-from mapreduce.map_reduce_pb2 import TaskInput, TaskType
+from mapreduce import config, logging_config, map_reduce_pb2_grpc
+from mapreduce.map_reduce_pb2 import Chunk, TaskInput, TaskType
 
 logger = logging_config.logger
+
+# Whitespace bytes used to snap chunk boundaries so no word is ever split.
+WHITESPACE_BYTES = b" \t\r\n"
 
 # Default address the driver binds to (all interfaces, port 8000).
 DEFAULT_BIND_ADDRESS = "[::]:8000"
@@ -27,24 +32,81 @@ def profile_context():
     profiler.disable()
 
 
-def assign_files_to_map_ids(N: int, data_dir: str) -> list[list[str]]:
-    files = glob.glob(f"{data_dir}/*.txt")
+def _next_boundary(path: str, target: int, size: int, block_size: int = 4096) -> int:
+    """Return the index of the first whitespace byte at or after ``target``.
 
-    # assign files to map IDs with round-robin strategy
-    return [files[i::N] for i in range(N)]
+    Seeks to ``target`` and scans forward in small blocks until a whitespace
+    byte is found, so a huge file is never read into memory. Returns ``size``
+    if no whitespace is found before EOF (e.g. a single token longer than the
+    chunk size still lands wholly in one chunk).
+    """
+    with open(path, "rb") as file:
+        file.seek(target)
+        offset = target
+        while offset < size:
+            block = file.read(block_size)
+            if not block:
+                break
+            for i, byte in enumerate(block):
+                if byte in WHITESPACE_BYTES:
+                    return offset + i
+            offset += len(block)
+    return size
+
+
+def split_file_into_chunks(path: str, chunk_size: int) -> Iterator[Chunk]:
+    """Yield contiguous, word-boundary-aligned byte-range chunks of ``path``.
+
+    Each chunk is roughly ``chunk_size`` bytes; every boundary is snapped to the
+    next whitespace byte so a word is never split across chunks. An empty file
+    yields no chunks.
+    """
+    size = os.path.getsize(path)
+    start = 0
+    while start < size:
+        target = min(start + chunk_size, size)
+        end = size if target >= size else _next_boundary(path, target, size)
+        yield Chunk(path=path, start=start, end=end)
+        start = end
+
+
+def resolve_input_files(data_dir: str | None, input_file: str | None) -> list[str]:
+    """Resolve the input ``.txt`` files from either a single file (``-file``) or
+    a directory of ``*.txt`` files (``-dir``). ``-file`` takes precedence."""
+    if input_file:
+        return [input_file]
+    return sorted(glob.glob(f"{data_dir}/*.txt"))
+
+
+def assign_chunks_to_map_ids(
+    N: int, files: list[str], chunk_size: int
+) -> list[list[Chunk]]:
+    """Split every input file into chunks, then round-robin them across N map
+    ids. A map id may receive zero, one, or many chunks."""
+    chunks = [
+        chunk for path in files for chunk in split_file_into_chunks(path, chunk_size)
+    ]
+    return [chunks[i::N] for i in range(N)]
 
 
 class DriverService(map_reduce_pb2_grpc.DriverServiceServicer):
-    def __init__(self, N: int, M: int, data_dir: str) -> None:
+    def __init__(
+        self,
+        N: int,
+        M: int,
+        files: list[str],
+        chunk_size: int = config.DEFAULT_CHUNK_SIZE,
+    ) -> None:
         self.N = N
         self.M = M
-        self.data_dir = data_dir
+        self.files = files
+        self.chunk_size = chunk_size
         self.state = TaskType.Map  # initially we start with Map
         self.task_id = 0
         self.done_count = 0
         self.event = Event()
         self.task_lock = Lock()
-        self.files_to_map_id = assign_files_to_map_ids(N, data_dir)
+        self.chunks_to_map_id = assign_chunks_to_map_ids(N, files, chunk_size)
 
     def _get_map_task(self) -> TaskInput:
         map_id = self.task_id
@@ -59,7 +121,7 @@ class DriverService(map_reduce_pb2_grpc.DriverServiceServicer):
         return TaskInput(
             type=TaskType.Map,
             id=map_id,
-            filePaths=self.files_to_map_id[map_id],
+            chunks=self.chunks_to_map_id[map_id],
             M=self.M,
         )
 
@@ -142,8 +204,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "`num_workers` threads to handle incoming requests concurrently."
         ),
     )
+    input_group = parser.add_mutually_exclusive_group()
+    input_group.add_argument(
+        "-dir",
+        dest="data_dir",
+        type=str,
+        default="./data",
+        help="Input directory; every *.txt file in it is processed (default: ./data).",
+    )
+    input_group.add_argument(
+        "-file",
+        dest="input_file",
+        type=str,
+        default=None,
+        help="A single input .txt file to process instead of -dir.",
+    )
     parser.add_argument(
-        "-dir", dest="data_dir", type=str, default="./data", help="Input data directory"
+        "--chunk-size",
+        dest="chunk_size",
+        type=int,
+        default=config.DEFAULT_CHUNK_SIZE,
+        help=(
+            "Approximate size in bytes of each input chunk handed to a map "
+            "task. Boundaries snap to the next whitespace so words are never "
+            f"split (default: {config.DEFAULT_CHUNK_SIZE})."
+        ),
     )
     parser.add_argument(
         "--address",
@@ -160,7 +245,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    service = DriverService(args.N, args.M, args.data_dir)
+    files = resolve_input_files(args.data_dir, args.input_file)
+    service = DriverService(args.N, args.M, files, args.chunk_size)
 
     if args.to_profile:
         with profile_context() as pr:
