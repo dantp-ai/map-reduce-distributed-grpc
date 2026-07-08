@@ -46,6 +46,9 @@ def cleanup() -> None:
 def test_mapreduce_end_to_end():
     cleanup()
     N, M, num_workers = 4, 6, 4
+    # A tiny chunk size forces the small sample files to split into several
+    # word-boundary chunks that get spread across the map tasks.
+    chunk_size = 16
 
     driver = subprocess.Popen(
         [
@@ -60,6 +63,8 @@ def test_mapreduce_end_to_end():
             str(num_workers),
             "-dir",
             str(DATA_DIR),
+            "--chunk-size",
+            str(chunk_size),
             "--address",
             f"[::]:{PORT}",
         ],

@@ -51,7 +51,7 @@ class Worker:
                 failures = 0
                 if task.type == TaskType.Map:
                     self.state = WorkerState.Work
-                    map_utils.map(task.id, task.filePaths, task.M, self.address)
+                    map_utils.map(task.id, task.chunks, task.M, self.address)
                 elif task.type == TaskType.Reduce:
                     self.state = WorkerState.Work
                     reduce_utils.reduce(task.id, self.address)

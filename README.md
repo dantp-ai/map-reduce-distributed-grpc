@@ -36,6 +36,8 @@ uv run mapreduce-driver -N 12 -M 8 -nw 4 -dir ./data
 - `-M`: number of REDUCE tasks (default: 6).
 - `-nw`: maximum number of worker threads the gRPC driver server uses to handle requests concurrently (default: 4).
 - `-dir`: directory containing the input `.txt` files (default: `./data`).
+- `--chunk-size`: approximate size in bytes of each input chunk handed to a map task (default: `1048576`, i.e. 1 MiB).
+  Input files are split into contiguous chunks of roughly this size; each boundary snaps to the next whitespace so words are never split.
 - `--address`: address the driver binds to (default: `[::]:8000`).
 - `--profile`: enable the profiler (default: off).
 
@@ -76,8 +78,9 @@ Outputs:
 uv run pytest
 ```
 
-The suite has unit tests (tokenizing, filtering, file assignment, bucketing, reducing, and the driver state machine).
-It also has one end-to-end test that runs the real driver and workers as subprocesses and compares the result against a naive single-process word count.
+The suite has unit tests (tokenizing, filtering, chunk splitting, chunk assignment, bucketing, reducing, and the driver state machine).
+A key invariant test checks that, across many chunk sizes, the multiset of words emitted from all chunks of a file equals a naive single-process count of the whole file: no word is dropped or duplicated.
+It also has one end-to-end test that runs the real driver and workers as subprocesses (with a small chunk size so the sample files split) and compares the result against a naive single-process word count.
 
 ## Regenerating the protobuf stubs
 
@@ -94,12 +97,18 @@ uv run python scripts/generate_protos.py
 - A worker that finishes its map tasks waits until all other in-flight map tasks are done before the reduce phase starts.
 - When all tasks are done, the driver shuts down and the workers exit.
 - Words are normalized by lowercasing the text and keeping only words whose characters are all in `a-z`.
-- Map tasks are assigned to input files with a round-robin strategy: the first task gets the first file, the second task the second file, and so on, wrapping around until every file is assigned.
+- Input files are split into contiguous byte-range chunks of roughly `--chunk-size` bytes.
+  Each chunk boundary is snapped forward to the next whitespace byte, so every word is wholly contained in exactly one chunk (no word is ever split).
+  The splitter seeks to each candidate boundary instead of scanning the whole file, so very large files are handled without reading them into memory.
+- The chunks are then assigned to the `-N` map tasks with a round-robin strategy: the first chunk goes to the first task, the second chunk to the second task, and so on, wrapping around until every chunk is assigned.
+  A map task may receive zero, one, or many chunks; a task with no chunks still completes so the phase can advance.
 
 ## Limitations
 
-- A map task processes an entire input file.
-  The implementation could be extended to process chunks of a file per map task.
-- Very large files are not handled well.
-  A single large file forces one worker to run much longer than the others while they sit idle.
-  Splitting files into roughly equal chunks on word boundaries (for example `min(chunksize, position_of_last_blank)`) would balance the work.
+Input files are now split into word-boundary chunks that are spread across the map tasks, so a map task processes chunks of a file rather than whole files, and a single large file is divided into many chunks instead of pinning one worker.
+Two residual caveats remain:
+
+- A single token longer than `--chunk-size` (a "word" with no whitespace inside it) still lands wholly in one chunk, so that one chunk can exceed the target size.
+  This keeps every word intact and is a non-issue for natural-language text.
+- Chunking reduces load skew but does not eliminate it.
+  Work is balanced by number of chunks, not by the number of words a chunk contains, and chunks are assigned statically up front rather than pulled on demand, so some imbalance can remain.
