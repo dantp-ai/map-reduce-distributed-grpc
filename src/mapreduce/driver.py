@@ -70,12 +70,19 @@ def split_file_into_chunks(path: str, chunk_size: int) -> Iterator[Chunk]:
         start = end
 
 
+def resolve_input_files(data_dir: str | None, input_file: str | None) -> list[str]:
+    """Resolve the input ``.txt`` files from either a single file (``-file``) or
+    a directory of ``*.txt`` files (``-dir``). ``-file`` takes precedence."""
+    if input_file:
+        return [input_file]
+    return sorted(glob.glob(f"{data_dir}/*.txt"))
+
+
 def assign_chunks_to_map_ids(
-    N: int, data_dir: str, chunk_size: int
+    N: int, files: list[str], chunk_size: int
 ) -> list[list[Chunk]]:
-    """Split every ``*.txt`` file into chunks, then round-robin them across N
-    map ids. A map id may receive zero, one, or many chunks."""
-    files = sorted(glob.glob(f"{data_dir}/*.txt"))
+    """Split every input file into chunks, then round-robin them across N map
+    ids. A map id may receive zero, one, or many chunks."""
     chunks = [
         chunk for path in files for chunk in split_file_into_chunks(path, chunk_size)
     ]
@@ -87,19 +94,19 @@ class DriverService(map_reduce_pb2_grpc.DriverServiceServicer):
         self,
         N: int,
         M: int,
-        data_dir: str,
+        files: list[str],
         chunk_size: int = config.DEFAULT_CHUNK_SIZE,
     ) -> None:
         self.N = N
         self.M = M
-        self.data_dir = data_dir
+        self.files = files
         self.chunk_size = chunk_size
         self.state = TaskType.Map  # initially we start with Map
         self.task_id = 0
         self.done_count = 0
         self.event = Event()
         self.task_lock = Lock()
-        self.chunks_to_map_id = assign_chunks_to_map_ids(N, data_dir, chunk_size)
+        self.chunks_to_map_id = assign_chunks_to_map_ids(N, files, chunk_size)
 
     def _get_map_task(self) -> TaskInput:
         map_id = self.task_id
@@ -197,8 +204,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "`num_workers` threads to handle incoming requests concurrently."
         ),
     )
-    parser.add_argument(
-        "-dir", dest="data_dir", type=str, default="./data", help="Input data directory"
+    input_group = parser.add_mutually_exclusive_group()
+    input_group.add_argument(
+        "-dir",
+        dest="data_dir",
+        type=str,
+        default="./data",
+        help="Input directory; every *.txt file in it is processed (default: ./data).",
+    )
+    input_group.add_argument(
+        "-file",
+        dest="input_file",
+        type=str,
+        default=None,
+        help="A single input .txt file to process instead of -dir.",
     )
     parser.add_argument(
         "--chunk-size",
@@ -226,7 +245,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    service = DriverService(args.N, args.M, args.data_dir, args.chunk_size)
+    files = resolve_input_files(args.data_dir, args.input_file)
+    service = DriverService(args.N, args.M, files, args.chunk_size)
 
     if args.to_profile:
         with profile_context() as pr:

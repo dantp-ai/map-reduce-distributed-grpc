@@ -36,10 +36,18 @@ uv run mapreduce-driver -N 12 -M 8 -nw 4 -dir ./data
 - `-M`: number of REDUCE tasks (default: 6).
 - `-nw`: maximum number of worker threads the gRPC driver server uses to handle requests concurrently (default: 4).
 - `-dir`: directory containing the input `.txt` files (default: `./data`).
+- `-file`: a single input `.txt` file to process instead of `-dir`.
+  `-dir` and `-file` are mutually exclusive - pass at most one.
 - `--chunk-size`: approximate size in bytes of each input chunk handed to a map task (default: `1048576`, i.e. 1 MiB).
   Input files are split into contiguous chunks of roughly this size; each boundary snaps to the next whitespace so words are never split.
 - `--address`: address the driver binds to (default: `[::]:8000`).
 - `--profile`: enable the profiler (default: off).
+
+To process a single file instead of a whole directory, use `-file`:
+
+```shell
+uv run mapreduce-driver -file ./data/big.txt --chunk-size 65536
+```
 
 Start each worker in its own terminal:
 

@@ -130,7 +130,7 @@ def test_assign_chunks_round_robin_covers_all_chunks(tmp_path):
     (tmp_path / "in.txt").write_bytes(SAMPLE_TEXT.encode())
 
     all_chunks = list(split_file_into_chunks(str(tmp_path / "in.txt"), 8))
-    groups = assign_chunks_to_map_ids(3, str(tmp_path), chunk_size=8)
+    groups = assign_chunks_to_map_ids(3, [str(tmp_path / "in.txt")], chunk_size=8)
 
     flat = [(c.path, c.start, c.end) for group in groups for c in group]
     expected = [(c.path, c.start, c.end) for c in all_chunks]
@@ -142,7 +142,9 @@ def test_assign_chunks_round_robin_covers_all_chunks(tmp_path):
 def test_assign_chunks_fewer_than_tasks_leaves_empty_task_lists(tmp_path):
     # A tiny single-chunk input across N=4 tasks: 3 tasks get nothing.
     (tmp_path / "in.txt").write_bytes(b"hello world")
-    groups = assign_chunks_to_map_ids(4, str(tmp_path), chunk_size=1_048_576)
+    groups = assign_chunks_to_map_ids(
+        4, [str(tmp_path / "in.txt")], chunk_size=1_048_576
+    )
 
     assert len(groups) == 4
     assert sum(len(g) for g in groups) == 1
@@ -154,9 +156,32 @@ def test_assign_chunks_more_than_tasks(tmp_path):
     n_chunks = len(list(split_file_into_chunks(str(tmp_path / "in.txt"), 8)))
     assert n_chunks > 2  # sanity: crafted input really splits
 
-    groups = assign_chunks_to_map_ids(2, str(tmp_path), chunk_size=8)
+    groups = assign_chunks_to_map_ids(2, [str(tmp_path / "in.txt")], chunk_size=8)
     assert sum(len(g) for g in groups) == n_chunks
     assert all(len(g) >= 1 for g in groups)
+
+
+# --- input resolution: -file vs -dir --------------------------------------
+def test_resolve_input_files_prefers_single_file():
+    assert driver.resolve_input_files("./data", "/tmp/one.txt") == ["/tmp/one.txt"]
+
+
+def test_resolve_input_files_globs_directory(tmp_path):
+    (tmp_path / "b.txt").write_text("x")
+    (tmp_path / "a.txt").write_text("x")
+    assert driver.resolve_input_files(str(tmp_path), None) == [
+        str(tmp_path / "a.txt"),
+        str(tmp_path / "b.txt"),
+    ]
+
+
+def test_driver_parse_args_accepts_file():
+    assert driver.parse_args(["-file", "corpus.txt"]).input_file == "corpus.txt"
+
+
+def test_driver_rejects_both_file_and_dir():
+    with pytest.raises(SystemExit):
+        driver.parse_args(["-dir", "data", "-file", "corpus.txt"])
 
 
 # --- reduce aggregation ---------------------------------------------------
@@ -177,7 +202,7 @@ def test_reduce_aggregates_bucket_counts(tmp_path, monkeypatch):
 
 # --- driver state machine -------------------------------------------------
 def test_driver_state_machine_full_cycle(tmp_path):
-    service = DriverService(N=2, M=2, data_dir=str(tmp_path))
+    service = DriverService(N=2, M=2, files=[])
     ctx = None
 
     # MAP phase: exactly N map tasks are handed out, then NoTask.
@@ -228,7 +253,7 @@ def test_driver_run_binds_passed_address(monkeypatch):
     monkeypatch.setattr(driver.grpc, "server", lambda *a, **k: fake_server)
     monkeypatch.setattr(driver.time, "sleep", lambda *a, **k: None)
 
-    service = DriverService(N=1, M=1, data_dir=".")
+    service = DriverService(N=1, M=1, files=[])
     service.event.set()  # so run() returns immediately without waiting
 
     driver.run(service, num_workers=1, address="[::]:12345")
