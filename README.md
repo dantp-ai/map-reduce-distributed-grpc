@@ -114,9 +114,7 @@ uv run python scripts/generate_protos.py
 ## Limitations
 
 Input files are now split into word-boundary chunks that are spread across the map tasks, so a map task processes chunks of a file rather than whole files, and a single large file is divided into many chunks instead of pinning one worker.
-Two residual caveats remain:
 
-- A single token longer than `--chunk-size` (a "word" with no whitespace inside it) still lands wholly in one chunk, so that one chunk can exceed the target size.
-  This keeps every word intact and is a non-issue for natural-language text.
-- Chunking reduces load skew but does not eliminate it.
-  Work is balanced by number of chunks, not by the number of words a chunk contains, and chunks are assigned statically up front rather than pulled on demand, so some imbalance can remain.
+One residual caveat remains:
+
+- Chunking reduces load skew but does not eliminate it. Work is balanced by number of chunks, not by the number of words a chunk contains, and chunks are assigned statically up front rather than pulled on demand, so some imbalance can remain.
